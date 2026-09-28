@@ -74,7 +74,9 @@ paper's actual pipeline.
      circles, flagged by circularity over 1.0, or line like slivers,
      flagged by eccentricity of 0.9 or higher) and for floes with an open
      boundary at the image edge, both are excluded from the final count
-     and from the sea ice concentration calculation.
+     and from the sea ice concentration calculation. EXCLUDE_EDGE_TOUCHING_FLOES
+     below can turn the edge exclusion off, at the cost of counting a
+     truncated, partial area floe as if it were a whole one.
 
 A note on SIC, since this went back and forth once already. A stage by
 stage check with debug_gvf_binary_stages.py found that merged, multi
@@ -178,6 +180,7 @@ MAX_EROSION_ITER = 15       # erosion attempts before falling back to circles
 CIRCULARITY_HALLUCINATION_MAX = 1.0    # contours more circular than a true circle, discretisation artefact
 ECCENTRICITY_HALLUCINATION_MIN = 0.9   # contours this elongated are treated as line like noise
 EDGE_MARGIN_PX = 2                     # contours within this many pixels of the frame edge are excluded
+EXCLUDE_EDGE_TOUCHING_FLOES = False    # False keeps edge-touching floes in the count and SIC, with their truncated, partial area
 
 VALID_PIXEL_MIN_BRIGHTNESS = 3   # near black pixels are treated as masked out (warp border), not water, checked on the plain grayscale frame, not the enhanced one
 
@@ -518,10 +521,11 @@ def is_hallucination(contour, circularity_max=CIRCULARITY_HALLUCINATION_MAX,
 def segment_frame(enhanced):
     """Runs the full Section 4.1 pipeline on one frame, returns
     (direct_contours, snake_contours), both lists of (n_points, 2)
-    arrays, already filtered for hallucinations and edge touching floes.
-    Both the binarization and the GVF force field are computed from
-    whatever frame is passed in, plain or enhanced, matching the paper's
-    use of one common input for both stages."""
+    arrays, already filtered for hallucinations and, when
+    EXCLUDE_EDGE_TOUCHING_FLOES is True, edge touching floes. Both the
+    binarization and the GVF force field are computed from whatever
+    frame is passed in, plain or enhanced, matching the paper's use of
+    one common input for both stages."""
     h, w = enhanced.shape
     binary = tiled_otsu_binarize(enhanced)
     raw_seeds = raw_local_maxima(binary)
@@ -546,7 +550,7 @@ def segment_frame(enhanced):
             contours, _ = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             if contours:
                 c = contours[0].reshape(-1, 2).astype(np.float64)
-                if not touches_edge(c, w, h):
+                if not EXCLUDE_EDGE_TOUCHING_FLOES or not touches_edge(c, w, h):
                     direct_contours.append(c)
             continue
 
@@ -558,7 +562,8 @@ def segment_frame(enhanced):
 
         for c0 in initial_contours:
             c1 = evolve_snake(c0, gvf_u, gvf_v)
-            if not touches_edge(c1, w, h) and not is_hallucination(c1):
+            edge_ok = not EXCLUDE_EDGE_TOUCHING_FLOES or not touches_edge(c1, w, h)
+            if edge_ok and not is_hallucination(c1):
                 snake_contours.append(c1)
 
     return direct_contours, snake_contours
