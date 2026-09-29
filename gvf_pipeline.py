@@ -150,7 +150,7 @@ OUTPUT_VIDEO_PATH = "gvf_snake_output.mp4"
 OUTPUT_CSV_PATH = "gvf_snake_sic_log.csv"
 FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"   # written once, deleted after calibration
 
-FRAME_STRIDE = 5          # process every Nth frame, see the note above on runtime
+FRAME_STRIDE = 1         # process every Nth frame, see the note above on runtime
 TILE_SIZE_PX = 150        # local Otsu tile size, paper uses 12x12 m tiles of about 20 floes
 APPLY_BINARY_OPENING = True   # toggle independently to test its effect in isolation from other changes
 OPENING_KERNEL_SIZE = 5       # matches Liss (2023), kernel size five for erosion and dilation noise cleanup
