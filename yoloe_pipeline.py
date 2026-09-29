@@ -117,7 +117,7 @@ OUTPUT_VIDEO_PATH = "yoloe_output.mp4"
 OUTPUT_CSV_PATH = "yoloe_sic_log.csv"
 FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"    # written once, deleted after calibration
 
-FRAME_STRIDE = 5   # matches gvf_pipeline.py, so both logs sample the same frames for comparison
+FRAME_STRIDE = 1   
 
 REFERENCE_FRAME_INDEX = 0   # which raw frame the visual prompt boxes get drawn on, see the note near the top of this file, a harder reference frame was already tried twice and made results worse, leave this at 0
 

@@ -121,7 +121,7 @@ OUTPUT_VIDEO_PATH = "sam2_output.mp4"
 OUTPUT_CSV_PATH = "sam2_sic_log.csv"
 FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"    # written once, deleted after calibration
 
-FRAME_STRIDE = 5   # matches gvf_pipeline.py and yoloe_pipeline.py, so all three logs sample the same frames
+FRAME_STRIDE = 1  
 
 # Checkpoint and config need to be downloaded separately per Meta's SAM 2
 # setup instructions, and both need to point at files that actually exist
