@@ -24,6 +24,7 @@ Produces, in a figures subfolder:
   fig_relative_error_count.png       mean relative error in floe count vs Liss, per method
   fig_relative_error_sic.png         mean relative error in SIC vs Liss, per method
   fig_time_per_floe.png              computation time per floe, per method
+  fig_time_per_frame_and_floe.png    computation time per frame and per floe, side by side, per method
 
 Run with:  python compare_methods.py
 """
@@ -234,6 +235,54 @@ def plot_time_per_floe(frames, out_path):
     print("Saved", out_path)
 
 
+# ---- plot 6, computation time per frame and per floe, side by side ---------
+
+def plot_time_per_frame_and_floe(frames, out_path):
+    """Time per frame and time per floe next to each other, one panel each,
+    so the two ways of reporting cost can be compared directly. The two
+    metrics differ by roughly two orders of magnitude for the slower
+    methods, so they are drawn on separate axes rather than one shared
+    axis or a twin axis, which would either flatten the per floe bars to
+    nothing or make the chart harder to read at a glance.
+
+    Time per frame is the mean of exec_time_s across all frames for that
+    method. Time per floe is computed the same way as plot_time_per_floe,
+    total execution time over total floe count across the whole run."""
+    methods = list(frames.keys())
+    per_frame_ms, per_floe_ms = [], []
+    for m in methods:
+        df = frames[m]
+        total_time = df["exec_time_s"].sum()
+        total_floes = df["floe_count"].sum()
+        per_frame_ms.append(df["exec_time_s"].mean() * 1000.0)
+        per_floe_ms.append((total_time / total_floes) * 1000.0 if total_floes > 0 else np.nan)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.5))
+    x = np.arange(len(methods))
+
+    ax1.bar(x, per_frame_ms, color=[COLORS[m] for m in methods])
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(methods)
+    ax1.set_ylabel("Mean time per frame [ms]")
+    ax1.set_title("Per frame")
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
+
+    ax2.bar(x, per_floe_ms, color=[COLORS[m] for m in methods])
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(methods)
+    ax2.set_ylabel("Time per floe [ms]")
+    ax2.set_title("Per floe")
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+
+    fig.suptitle("Computational cost, per frame versus per floe, by method")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print("Saved", out_path)
+
+
 # ---- entry point -------------------------------------------------------------
 
 def main():
@@ -286,8 +335,9 @@ def main():
     )
 
     plot_time_per_floe(frames, os.path.join(OUT_DIR, "fig_time_per_floe.png"))
+    plot_time_per_frame_and_floe(frames, os.path.join(OUT_DIR, "fig_time_per_frame_and_floe.png"))
 
-    print(f"\nDone. Eleven figures saved to '{OUT_DIR}/'.")
+    print(f"\nDone. Twelve figures saved to '{OUT_DIR}/'.")
 
 
 if __name__ == "__main__":

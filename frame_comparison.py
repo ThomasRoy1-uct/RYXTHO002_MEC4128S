@@ -37,7 +37,7 @@ VIDEOS = {
 
 # the frame(s) to compare, e.g. [280] for the wave affected frame, or
 # [280, 265] for several at once
-FRAME_INDICES = [1]
+FRAME_INDICES = [1,280]
 
 FRAME_STRIDE = 1   # set to whatever stride the compared runs used
 OUT_DIR = "figures"
