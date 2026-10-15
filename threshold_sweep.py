@@ -9,20 +9,10 @@ correlation between floe count and SIC, disappears, which is treated
 as the point where segmentation is properly resolving floes rather
 than merging them into outlier blobs.
 
-Also logs every frame's floe count and SIC for every threshold tested,
-not just the summary statistics, so a promising threshold's actual
-distribution can be checked for a bimodal split or other odd behavior
-the mean and correlation alone would hide.
 
-Usage
-
-    python threshold_sweep.py
 
 Reads video01.mp4 from the current folder. Reuses liss_benchmark from
 benchmark_pipeline.py, so that file must be in the same folder.
-Produces two files, threshold_sweep_summary.csv, one row per threshold
-tested, and threshold_sweep_per_frame.csv, one row per frame per
-threshold, and prints the summary table to the console as it runs.
 """
 
 import cv2
@@ -35,8 +25,7 @@ VIDEO_FILE = "video01.mp4"
 SUMMARY_CSV = "threshold_sweep_summary.csv"
 PER_FRAME_CSV = "threshold_sweep_per_frame.csv"
 
-# Narrowed sweep, based on the coarse pass showing the interesting, non
-# monotonic behavior sits between 140 and 175
+# Narrowed sweep
 THRESHOLDS_TO_TEST = list(range(140, 176, 3))
 
 
@@ -63,7 +52,7 @@ def main():
     if not ret:
         raise RuntimeError("Could not read first frame")
 
-    # Same calibration step used by benchmark_pipeline.py, locked in once and reused for every threshold tested
+    # Same calibration step used by benchmark_pipeline.py.
     cv2.imwrite("first_frame.jpg", first_frame)
     _, factor, x, y, _, _ = initial_perspective_transform("first_frame.jpg")
 

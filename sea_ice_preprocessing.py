@@ -19,12 +19,6 @@ enhance_gray() is gray level homogenization, matching Passerotti et al.
 anisotropic diffusion filter, and CLAHE contrast enhancement, with each
 step individually toggleable so their effects can be tested in isolation
 against the same footage.
-
-preprocess_frame() chains perspective_transform() and enhance_gray()
-into a single call, taking a raw BGR frame and the locked in calibration
-values, and returning a ready to segment enhanced grayscale frame. Added
-for use by benchmark_pipeline.py, the Liss contouring benchmark, so it
-runs through the same preprocessing as the other three pipelines.
 """
 
 import cv2
@@ -41,8 +35,6 @@ def nothing(x):
 def initial_perspective_transform(imagefile):
     """
     This function is used to set the perspective transform of the first frame of the video
-    :param imagefile: path of the first frame of the video
-    :return: transformed image, scaling factor, x shift number of pixels, y shift number of pixels, width of transformed image, height of transformed image
     """
 
     # Read in image
@@ -56,11 +48,9 @@ def initial_perspective_transform(imagefile):
     length = 25
 
     # Sizing off the trapazoid based of the camera angle above open ocean
-    # The back horizontal line are what the other lines are based off
     orth_x = 10/5
     orth_y = 214/125
 
-    # Create a black image, a window
     # Output image size
     cv2.namedWindow('image', cv2.WINDOW_AUTOSIZE)
 
@@ -131,11 +121,6 @@ def initial_perspective_transform(imagefile):
 def perspective_transform(image, factor, x, y):
     """
     This function is used execute the perspective transform on the rest of the frames of the video
-    :param image: frame from the video
-    :param factor: the scaling factor from the initial_perspective_transform function
-    :param x: the x shift number of pixels from the initial_perspective_transform function
-    :param y: the y shift number of pixels from the initial_perspective_transform function
-    :return: transformed image
     """
 
     # Sizing in original image
@@ -184,27 +169,19 @@ def perspective_transform(image, factor, x, y):
 def enhance_gray(gray, apply_bilateral=True, apply_diffusion=True, apply_clahe=True,
                   clahe_clip_limit=2.0, clahe_tile_size=8):
     """Gray level homogenization, matching Passerotti et al. (2026)
-    Section 3.3. Combines an edge preserving bilateral filter, an
-    anisotropic diffusion filter (Perona and Malik, 1990), and CLAHE
-    contrast enhancement. Each step is individually toggleable, and
-    CLAHE's own parameters are exposed, so the contribution of each
-    piece can be tested in isolation against the same footage, rather
-    than only ever running or not running as one combined block."""
+    """
 
     result = gray
 
     if apply_bilateral:
-        # Edge preserving smoothing, flattens noise within a floe while
-        # keeping strong boundaries between floes intact
+        # Edge preserving smoothing
         result = cv2.bilateralFilter(result, d=9, sigmaColor=50, sigmaSpace=50)
 
     if apply_diffusion:
-        # Anisotropic diffusion, several small steps of diffusion that
-        # resist crossing strong gradients, further reducing noise inside
-        # floes without blurring their edges
+        # Anisotropic diffusion
         diffused = result.astype(np.float64)
         kappa = 20.0     # gradient threshold, lower values preserve more edges
-        gamma = 0.15     # step size, kept below 0.25 for numerical stability
+        gamma = 0.15     # step size
         n_iter = 8
         for _ in range(n_iter):
             n = np.roll(diffused, -1, axis=0) - diffused
@@ -221,10 +198,7 @@ def enhance_gray(gray, apply_bilateral=True, apply_diffusion=True, apply_clahe=T
     if apply_clahe:
         # Contrast limited adaptive histogram equalization, boosts local
         # contrast so faint boundaries between similarly shaded floes
-        # stand out more clearly. This is also the step most likely to
-        # sharpen faint texture or lighting variation inside a single
-        # floe into something that reads as a false internal boundary,
-        # worth lowering clahe_clip_limit if that shows up in testing.
+        # stand out more clearly. 
         clahe = cv2.createCLAHE(clipLimit=clahe_clip_limit, tileGridSize=(clahe_tile_size, clahe_tile_size))
         result = clahe.apply(result)
 
@@ -237,14 +211,6 @@ def preprocess_frame(frame, factor, x, y, apply_bilateral=True, apply_diffusion=
     Runs the full shared preprocessing chain on a single raw BGR frame,
     perspective correction followed by gray level homogenization, and
     returns a ready to segment enhanced grayscale frame.
-
-    :param frame: a single raw BGR frame, as a numpy array
-    :param factor: scaling factor from initial_perspective_transform
-    :param x: x shift from initial_perspective_transform
-    :param y: y shift from initial_perspective_transform
-    :param apply_bilateral, apply_diffusion, apply_clahe, clahe_clip_limit, clahe_tile_size:
-        passed straight through to enhance_gray
-    :return: enhanced grayscale frame
     """
     image_trans = perspective_transform(frame, factor, x, y)
     gray = cv2.cvtColor(image_trans, cv2.COLOR_BGR2GRAY)

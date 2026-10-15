@@ -1,7 +1,5 @@
 """
-GVF snake video pipeline, matched to Passerotti et al. (2026, Earth and
-Space Science, "Sea Ice Floe Segmentation in Close Range Optical Imagery
-Using Active Contour and Foundation Models"), Section 4.1.
+GVF snake video pipeline, matched to Passerotti et al. (2026)
 
 Preprocessing (perspective correction and gray level enhancement) is
 handled by sea_ice_preprocessing.py, so this script runs calibration once
@@ -10,23 +8,12 @@ corrected, enhanced, and segmented in the same loop.
 
 ENHANCE_GRAY_ENABLED and the three APPLY_* flags below control gray
 level enhancement independently, so each step's contribution can be
-tested in isolation on the same footage. Setting ENHANCE_GRAY_ENABLED to
-False falls back to a plain grayscale conversion, matching the pipeline's
-behaviour before this feature was added.
+tested in isolation on the same footage. 
 
-This replaces an earlier seeding method (k means clustering on HSV Value
-and Saturation, then a flat distance transform cutoff for seeds) with the
-paper's actual pipeline.
+
 
   1. Binarize via Otsu thresholding, run per tile rather than globally,
-     on the (optionally enhanced) grayscale frame. The paper does this
-     over 12 x 12 m clusters of about 20 floes each, since a small
-     region's gray scale histogram has clearer modes than one histogram
-     over a whole image of mixed ice concentration. No metre per pixel
-     calibration exists for this camera yet, so tiles are defined in
-     pixels instead, see TILE_SIZE_PX below. A light morphological
-     opening is then applied to the combined binary mask, matching a
-     post threshold cleanup step in Liss (2023), see
+     on the (optionally enhanced) grayscale frame. 
      APPLY_BINARY_OPENING below, this is not part of the paper's method
      itself, it is a noise reduction step borrowed from the predecessor
      project.
@@ -37,94 +24,27 @@ paper's actual pipeline.
      local maxima are found across the whole frame first, then
      deduplicated separately within each connected component, since what
      counts as too close together to be a separate object depends on how
-     large that particular object is, not on a single value shared
-     across the whole frame.
+     large that particular object is.
 
-     Within one connected component, each pair of seeds is compared
-     against a separation floor based on their own shared depth, the
-     smaller of the two, not a single deepest value taken from elsewhere
-     in the same component. An earlier version of this function used one
-     deepest value per component, which worked when a component
-     contained one floe, but broke down for a component containing
-     several floes of very different sizes chained together, since a
-     large floe's own depth elsewhere in the blob set a threshold far too
-     loose to catch two shallow, closely spaced seeds sitting on a
-     smaller, unrelated floe in the same blob, see
-     suppress_seeds_in_component below.
+    
 
   3. For each connected foreground blob, if it contains exactly one seed
      after suppression, it is an isolated floe, segmented directly from
      the binarization, no snake needed. If it contains more than one
      seed, it is a merged region, and morphological erosion is attempted
      to split it into separate pieces. Where erosion succeeds, only the
-     largest num_seeds fragments at that point are kept, see the note in
-     separate_merged_object below on why that cap was added. Each kept
-     piece gets an initial contour as an ellipse fitted to match its
-     second moment (covariance matrix), not a boundary fit. Where erosion
-     cannot cleanly separate the pieces, each seed instead gets a
-     circular initial contour, sized from its own distance transform
-     value.
+     largest num_seeds fragments at that point are kept.
 
   4. The GVF snake then expands every non isolated initial contour on the
      same (optionally enhanced) frame, using the Xu and Prince (1998)
-     diffusion equation, with a numerically stable time step bounded by
-     both the diffusion term and the reaction term.
+     diffusion equation.
 
   5. Converged contours are filtered for hallucinations (near perfect
      circles, flagged by circularity over 1.0, or line like slivers,
-     flagged by eccentricity of 0.9 or higher) and for floes with an open
-     boundary at the image edge, both are excluded from the final count
-     and from the sea ice concentration calculation. EXCLUDE_EDGE_TOUCHING_FLOES
-     below can turn the edge exclusion off, at the cost of counting a
-     truncated, partial area floe as if it were a whole one.
+     flagged by eccentricity of 0.9 or higher)
 
-A note on SIC, since this went back and forth once already. A stage by
-stage check with debug_gvf_binary_stages.py found that merged, multi
-seed regions lose real area during erosion based separation and ellipse
-fitting, up to 82 percent on the worst measured case, while the binary
-mask itself tracks visible floe boundaries closely at every stage. That
-led to briefly measuring SIC straight from the binary mask instead of
-the final contour mask, which fixed the measured shrinkage but caused
-GVF's SIC to overshoot past both SAM 2 and YOLOE on most frames instead
-of landing near them, and meant GVF's SIC no longer measured the same
-thing Passerotti et al. report for GVF, whose own concentration figure
-comes from the same floe level contours as their floe count, carrying
-the same missing and misinterpreted floe errors baked in. Raised with
-the project supervisor, the decision was to keep SIC contour based, as
-below, matching the paper's own method, and to note the binary mask
-shrinkage and the option of measuring SIC from it directly in the
-thesis recommendations rather than building it into the comparison
-itself.
-
-A related option, replacing erosion based separation with watershed
-reconstruction, letting eroded seed pieces flood fill back out to their
-true, un-eroded boundary rather than fitting an ellipse to the shrunk
-piece, was also raised and set aside for the same reason, the brief was
-to keep GVF implemented the same way Passerotti et al. describe it,
-not a different, independently improved method.
-
-A further option, feeding the ML pipelines the binary mask directly
-rather than the corrected colour frame, since it separates ice from
-water cleanly, was also discussed and declined for the comparison
-itself, the point of this benchmark is what each model can do with a
-normal frame, not what they could do with GVF's own preprocessing
-handed to them, also worth a mention in recommendations rather than
-part of the result.
-
-What this script intentionally does NOT try to match, the paper reports
-this per floe process running some tens of seconds per floe (Section
-4.1), evaluated on a set of still images, not a continuous video. Applied
-to every frame of a full video at that rate would be impractical. This
-implementation is substantially faster in testing (roughly 2 seconds per
-500 x 500 frame with several dozen floes, on CPU), but a full video can
-still be slow. FRAME_STRIDE below controls how many frames are actually
-processed, skipping frames is a video specific compromise the paper's own
-still image method has no need for, everything within a processed frame
-follows the paper's method as described above.
 
 Usage
------
-    python gvf_pipeline.py
 
 Reads RAW_VIDEO_PATH below, runs interactive perspective calibration once
 against its first frame, then processes the rest of the video. Writes an
@@ -142,71 +62,58 @@ import numpy as np
 from sea_ice_preprocessing import initial_perspective_transform, perspective_transform, enhance_gray
 
 
-# ----------------------------------------------------------------------------
+
 # Configuration
-# ----------------------------------------------------------------------------
-RAW_VIDEO_PATH = "video01.mp4"                   # your original, unprocessed footage
+RAW_VIDEO_PATH = "video01.mp4"                   
 OUTPUT_VIDEO_PATH = "gvf_snake_output.mp4"
 OUTPUT_CSV_PATH = "gvf_snake_sic_log.csv"
-FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"   # written once, deleted after calibration
+FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"   
 
 FRAME_STRIDE = 1         # process every Nth frame, see the note above on runtime
-TILE_SIZE_PX = 150        # local Otsu tile size, paper uses 12x12 m tiles of about 20 floes
-APPLY_BINARY_OPENING = True   # toggle independently to test its effect in isolation from other changes
-OPENING_KERNEL_SIZE = 5       # matches Liss (2023), kernel size five for erosion and dilation noise cleanup
+TILE_SIZE_PX = 150        
+APPLY_BINARY_OPENING = True   
+OPENING_KERNEL_SIZE = 5       
 
 # Gray level enhancement toggles, see enhance_gray in sea_ice_preprocessing.py
-ENHANCE_GRAY_ENABLED = True   # master switch, False falls back to plain grayscale
+ENHANCE_GRAY_ENABLED = True   
 APPLY_BILATERAL = True
 APPLY_DIFFUSION = True
 APPLY_CLAHE = True
 CLAHE_CLIP_LIMIT = 2.0        # lower this first if CLAHE is sharpening false internal boundaries
 CLAHE_TILE_SIZE = 8
 
-MIN_SEED_DISTANCE = 4.0   # raised from 1.0, suppresses secondary peaks along a single floe's medial axis
-ABS_SEP_SCALE_FACTOR = 3.6   # raised from 2.0, measured directly via debug_gvf_seeds.py against six confirmed over split floes, ratios 2.20 to 3.41, and two confirmed genuinely separate pairs, ratios 4.28 and 5.72, 3.5 sits inside that gap and was settled on by checking the resulting output visually
-ABS_SEP_MIN_PX = 8           # lower bound, guards very shallow seeds sitting just above MIN_SEED_DISTANCE
-MIN_COMPONENT_AREA = 15   # connected components smaller than this are treated as noise, not floes
+MIN_SEED_DISTANCE = 4.0   
+ABS_SEP_SCALE_FACTOR = 3.6   
+ABS_SEP_MIN_PX = 8           
+MIN_COMPONENT_AREA = 15  
 
-N_POINTS = 40              # points per closed contour
-MU = 0.15                  # GVF regularisation weight
+N_POINTS = 40              
+MU = 0.15                  
 GVF_ITER = 120              # GVF diffusion iterations per frame
 ALPHA, BETA, GAMMA = 0.02, 0.02, 1.0   # snake tension, rigidity, step size weights
-SNAKE_ITER = 150            # snake evolution iterations per initial contour
+SNAKE_ITER = 150            
 
-EROSION_KERNEL_SIZE = 3     # structuring element size for the merged object separation attempt
-MAX_EROSION_ITER = 15       # erosion attempts before falling back to circles
+EROSION_KERNEL_SIZE = 3     
+MAX_EROSION_ITER = 15       
 
 CIRCULARITY_HALLUCINATION_MAX = 1.0    # contours more circular than a true circle, discretisation artefact
 ECCENTRICITY_HALLUCINATION_MIN = 0.9   # contours this elongated are treated as line like noise
-EDGE_MARGIN_PX = 2                     # contours within this many pixels of the frame edge are excluded
-EXCLUDE_EDGE_TOUCHING_FLOES = False    # False keeps edge-touching floes in the count and SIC, with their truncated, partial area
+EDGE_MARGIN_PX = 2                     
+EXCLUDE_EDGE_TOUCHING_FLOES = False    # False keeps edge-touching floes in the count and SIC
 
-VALID_PIXEL_MIN_BRIGHTNESS = 3   # near black pixels are treated as masked out (warp border), not water, checked on the plain grayscale frame, not the enhanced one
+VALID_PIXEL_MIN_BRIGHTNESS = 3   # near black pixels are treated as masked out 
 
 
-# ----------------------------------------------------------------------------
+
 # Stage 1, tiled Otsu binarization
-# ----------------------------------------------------------------------------
 def tiled_otsu_binarize(gray, tile_size=TILE_SIZE_PX, apply_opening=APPLY_BINARY_OPENING,
                          opening_kernel_size=OPENING_KERNEL_SIZE):
-    """Foreground and background split via Otsu, run per tile. Matches
-    Section 4.1, run over small clusters so the local histogram has
-    clearer modes than a single global histogram over a full frame of
-    mixed ice concentration would.
-
+    """Foreground and background split via Otsu, run per tile. 
     apply_opening runs a light morphological opening (erosion followed by
-    dilation) on the combined binary mask afterwards, matching Liss
-    (2023)'s post threshold cleanup step, kernel size five there also.
-    This is not part of Passerotti et al. (2026) Section 4.1 itself, it
-    is a noise reduction step borrowed from the predecessor project.
-
+    dilation) on the combined binary mask afterwards
     Confirmed directly via debug_gvf_binary_stages.py to track visible
-    floe boundaries closely both before and after opening runs. This
-    stage measures ice extent well, the SIC accuracy question this
-    project ran into lived downstream, in separation and fitting, not
-    here, see the note near the top of this file for how that was
-    resolved."""
+    floe boundaries closely both before and after opening runs."""
+
     h, w = gray.shape
     binary = np.zeros_like(gray, dtype=np.uint8)
     for y0 in range(0, h, tile_size):
@@ -225,16 +132,11 @@ def tiled_otsu_binarize(gray, tile_size=TILE_SIZE_PX, apply_opening=APPLY_BINARY
     return binary
 
 
-# ----------------------------------------------------------------------------
 # Stage 2, distance transform and per component local maxima seeding
-# ----------------------------------------------------------------------------
 def raw_local_maxima(binary, neighborhood=5, min_dist_value=MIN_SEED_DISTANCE):
     """Finds every pixel that is a true local maximum of the distance
-    transform, matching the paper's local maxima in this distance map
-    serve as seeds. No suppression is applied here, that happens
-    separately per connected component in suppress_seeds_in_component,
-    since a single global separation distance cannot fit floes of very
-    different sizes appearing within the same frame."""
+    transform. No suppression is applied here"""
+
     dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
     local_max = cv2.dilate(dist, np.ones((neighborhood, neighborhood), np.uint8))
     maxima_mask = ((dist == local_max) & (dist > min_dist_value)).astype(np.uint8)
@@ -251,32 +153,8 @@ def raw_local_maxima(binary, neighborhood=5, min_dist_value=MIN_SEED_DISTANCE):
 def suppress_seeds_in_component(seeds_in_comp, scale_factor=ABS_SEP_SCALE_FACTOR, min_sep_px=ABS_SEP_MIN_PX):
     """Deduplicates seeds belonging to one connected component, one floe
     or one merged cluster, keeping the deepest seed in any cluster of
-    seeds too close together to be genuinely separate objects.
+    seeds too close together to be genuinely separate objects."""
 
-    Each pair of seeds is compared against a separation floor based on
-    their own shared depth, the smaller of the two, not a single value
-    borrowed from elsewhere in the same component. An earlier version of
-    this function used one deepest value for the whole component, which
-    worked for a component containing one floe, but broke down for a
-    component containing several floes of very different sizes chained
-    together, since a large floe's own depth elsewhere in the blob set a
-    threshold far too loose to catch two shallow, closely spaced seeds on
-    a smaller, unrelated floe in the same blob.
-
-    scale_factor was retuned directly against measured spacing and depth
-    on real footage rather than guessed, twice now. The first pass, on
-    elongated floes, adjacent medial axis peaks were found roughly 24 to
-    29 pixels apart while carrying depth values around 14 to 21, a ratio
-    of roughly 1.4 to 2.0, landing on 2.0. A second pass measured against
-    a different, more irregular floe shape found ratios of 2.20 to 3.41
-    across six further confirmed over split cases, alongside two
-    confirmed genuinely separate pairs at 4.28 and 5.72, landing on 3.5
-    as a value inside that gap, checked visually against the resulting
-    output. This remains a measurement based value, not a derived
-    constant, and the gap between the two groups is not fully mapped,
-    since the should be one side extended further every time more
-    examples were checked, worth treating as provisional rather than
-    settled if further examples turn up beyond this range."""
     if not seeds_in_comp:
         return []
     seeds_sorted = sorted(seeds_in_comp, key=lambda s: -s[2])
@@ -293,14 +171,11 @@ def suppress_seeds_in_component(seeds_in_comp, scale_factor=ABS_SEP_SCALE_FACTOR
     return kept
 
 
-# ----------------------------------------------------------------------------
 # Stage 3, classify isolated vs merged objects, separate merged ones
-# ----------------------------------------------------------------------------
+
 def ellipse_from_moments(mask):
     """Fits an ellipse by matching the second moment of the object's
-    covariance matrix, the phrase Section 4.1 uses, rather than fitting to
-    boundary points. Returns (cx, cy, semi_major, semi_minor, angle_rad),
-    or None if the mask has too few pixels to define a covariance."""
+    covariance matrix"""
     ys, xs = np.nonzero(mask)
     if len(xs) < 4:
         return None
@@ -318,33 +193,13 @@ def ellipse_from_moments(mask):
 def separate_merged_object(component_mask, num_seeds, max_erosion_iter=MAX_EROSION_ITER,
                             kernel_size=EROSION_KERNEL_SIZE, min_area=MIN_COMPONENT_AREA):
     """Attempts to split a merged, multi seed blob via morphological
-    erosion, matching Section 4.1's separating adjacent objects by
-    smoothing their edges through a morphological erosion process.
-    Returns a list of ellipse parameters, one per separated piece, or an
-    empty list if erosion never reaches num_seeds separate pieces before
-    the object erodes away, in which case the caller falls back to
-    circles, matching the paper's description for floes that share
-    significant portions of their edges and cannot be separated
-    successfully using morphological erosion.
+    erosion.
 
     Only the num_seeds largest qualifying fragments are kept once the
-    threshold is reached. The stopping check is len(pieces) >= num_seeds,
-    not equality, and the exact iteration that first satisfies it can
-    include small noise fragments alongside the real pieces, especially
-    when num_seeds is low and the loop stops after only a little erosion.
-    Keeping only the largest num_seeds fragments discards that noise
-    rather than returning it as extra floes.
+    threshold is reached. 
 
     Each ellipse is fitted to a piece after erosion has already shrunk
-    it, not against the original, pre erosion boundary, so it does come
-    out smaller than the true floe, more so the more passes a heavily
-    merged region needed, measured directly via
-    debug_gvf_binary_stages.py. A margin compensation added to
-    ellipse_from_moments to correct for this was tried and made no
-    measurable difference to that shrinkage, the snake's own tension and
-    rigidity convergence appears to be the actual bottleneck rather than
-    the initial ellipse size, so the compensation was removed again
-    rather than left in as dead weight. SIC is measured from this final
+    it, not against the original. SIC is measured from this final
     contour mask, so this shrinkage does affect the concentration
     figure, not just the shape of the drawn contours, see the note near
     the top of this file for why that trade off was accepted."""
@@ -373,9 +228,7 @@ def separate_merged_object(component_mask, num_seeds, max_erosion_iter=MAX_EROSI
     return []
 
 
-# ----------------------------------------------------------------------------
 # Stage 4, GVF diffusion (numerically stable) and snake evolution
-# ----------------------------------------------------------------------------
 def make_circular_contour(cx, cy, radius, n_points=N_POINTS):
     angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
     return np.stack([cx + radius * np.cos(angles), cy + radius * np.sin(angles)], axis=1)
@@ -403,8 +256,7 @@ def compute_edge_map(intensity):
 
 def laplacian(field):
     """5 point discrete Laplacian via np.roll. This wraps at the image
-    edges rather than using a zero flux boundary, a minor artefact right
-    at the frame border, not usually visible mid frame."""
+    edges rather than using a zero flux boundary"""
     return (
         np.roll(field, 1, axis=0) + np.roll(field, -1, axis=0) +
         np.roll(field, 1, axis=1) + np.roll(field, -1, axis=1) -
@@ -414,11 +266,7 @@ def laplacian(field):
 
 def compute_gvf(fx, fy, mu=MU, n_iter=GVF_ITER):
     """Xu and Prince (1998) GVF diffusion, with a numerically stable time
-    step. The step is bounded by both the diffusion term (mu) and the
-    reaction term (b = fx squared plus fy squared), the latter was
-    previously left unbounded, which let the field blow up past 1e100 in
-    testing over 120 iterations. This version keeps the field's magnitude
-    bounded through all iterations."""
+    step. """
     u, v = fx.copy(), fy.copy()
     b = fx ** 2 + fy ** 2
     c1, c2 = b * fx, b * fy
@@ -445,7 +293,7 @@ def build_internal_matrix(n_points, alpha, beta, gamma, dt=1.0):
     return np.linalg.inv(I - (dt / gamma) * A)
 
 
-INTERNAL_INV = build_internal_matrix(N_POINTS, ALPHA, BETA, GAMMA)  # module level constant, computed once
+INTERNAL_INV = build_internal_matrix(N_POINTS, ALPHA, BETA, GAMMA)  
 
 
 def sample_bilinear(field, xs, ys):
@@ -474,14 +322,12 @@ def evolve_snake(contour, gvf_u, gvf_v, internal_inv=INTERNAL_INV, n_iterations=
     return C
 
 
-# ----------------------------------------------------------------------------
+
 # Stage 5, hallucination filtering and edge exclusion
-# ----------------------------------------------------------------------------
+
 def circularity(contour):
     """4 pi Area over Perimeter squared. A true circle is 1.0,
-    discretisation noise on tiny or near circular contours can push this
-    slightly over 1, the signature Section 4.1 uses to flag hallucinated
-    near perfect circles."""
+    """
     pts = contour.astype(np.float32).reshape(-1, 1, 2)
     area = cv2.contourArea(pts)
     perimeter = cv2.arcLength(pts, closed=True)
@@ -491,7 +337,7 @@ def circularity(contour):
 
 
 def eccentricity(contour):
-    """0 for a circle, approaching 1 for a flattened, line like sliver."""
+    
     pts = contour.astype(np.float32).reshape(-1, 1, 2)
     if len(pts) < 5:
         return 0.0
@@ -514,18 +360,9 @@ def is_hallucination(contour, circularity_max=CIRCULARITY_HALLUCINATION_MAX,
                       eccentricity_min=ECCENTRICITY_HALLUCINATION_MIN):
     return circularity(contour) > circularity_max or eccentricity(contour) >= eccentricity_min
 
-
-# ----------------------------------------------------------------------------
 # Full per frame pipeline
-# ----------------------------------------------------------------------------
 def segment_frame(enhanced):
-    """Runs the full Section 4.1 pipeline on one frame, returns
-    (direct_contours, snake_contours), both lists of (n_points, 2)
-    arrays, already filtered for hallucinations and, when
-    EXCLUDE_EDGE_TOUCHING_FLOES is True, edge touching floes. Both the
-    binarization and the GVF force field are computed from whatever
-    frame is passed in, plain or enhanced, matching the paper's use of
-    one common input for both stages."""
+    
     h, w = enhanced.shape
     binary = tiled_otsu_binarize(enhanced)
     raw_seeds = raw_local_maxima(binary)
@@ -580,17 +417,10 @@ def contours_to_mask(contours, shape):
 def valid_pixel_mask(gray, min_brightness=VALID_PIXEL_MIN_BRIGHTNESS):
     """Near black pixels are treated as the blank border warpPerspective
     can leave outside the mapped source region, not open water, and are
-    excluded from the sea ice concentration denominator, matching the
-    paper excluding masked out regions introduced by orthorectification.
-    Deliberately checked against the plain grayscale frame, not the
-    enhanced one, since CLAHE and diffusion can shift what counts as near
-    black right at the warp border."""
+    excluded from the sea ice concentration denominator"""
     return (gray >= min_brightness).astype(np.uint8)
 
-
-# ----------------------------------------------------------------------------
 # Main video loop, calibration once, then preprocessing and GVF together
-# ----------------------------------------------------------------------------
 def main():
     cap = cv2.VideoCapture(RAW_VIDEO_PATH)
     if not cap.isOpened():
@@ -610,8 +440,7 @@ def main():
     _, factor, x, y, width, height = initial_perspective_transform(FIRST_FRAME_TEMP_PATH)
     os.remove(FIRST_FRAME_TEMP_PATH)
 
-    # Rewind to the start, the frame used for calibration still needs to
-    # go through the full pipeline like every other frame
+    
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     out_fps = max(fps / FRAME_STRIDE, 1.0)
@@ -643,7 +472,6 @@ def main():
 
         # Preprocessing, using the calibration locked in above, then
         # optional gray level enhancement matching Passerotti et al.
-        # (2026), controlled by the toggles at the top of this file
         corrected = perspective_transform(frame, factor, x, y)
         gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
 
@@ -658,10 +486,7 @@ def main():
         direct_contours, snake_contours = segment_frame(enhanced)
         all_contours = direct_contours + snake_contours
 
-        # SIC measured from the final contour mask, matching Passerotti
-        # et al. Section 4.1, confirmed with the project supervisor over
-        # the binary mask alternative tried briefly, see the note near
-        # the top of this file for why
+        # SIC measured from the final contour mask
         floe_mask = contours_to_mask(all_contours, gray.shape)
         valid_mask = valid_pixel_mask(gray)
         valid_pixels = max(int(valid_mask.sum()), 1)

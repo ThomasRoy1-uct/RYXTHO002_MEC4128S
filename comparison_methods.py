@@ -7,12 +7,6 @@ index with the Liss (2023) benchmark as the reference, and produces the
 comparison plots for the output metrics and analysis framework section and
 the Results chapter.
 
-Styled after Passerotti et al. (2026) Figure 11, relative error and
-distribution style comparison against a reference, substituting the Liss
-baseline for their manual benchmark, since no manually segmented ground
-truth exists for this footage. Floe size is not included, since it would
-need a pixel to area calibration that is not available for this project.
-
 Expects the four log CSVs in the same folder as this script, using the
 filenames each pipeline already writes.
 
@@ -21,12 +15,15 @@ Produces, in a figures subfolder:
   fig_floe_count_per_frame.png       floe count vs frame, all four methods overlaid
   fig_sic_<method>_vs_liss.png       SIC vs frame, one method against Liss on its own, one file per method
   fig_floe_count_<method>_vs_liss.png  floe count vs frame, one method against Liss on its own, one file per method
+  fig_own_<method>.png               SIC and floe count vs frame, one method on its own, with its mean marked, one file per method
   fig_relative_error_count.png       mean relative error in floe count vs Liss, per method
   fig_relative_error_sic.png         mean relative error in SIC vs Liss, per method
+  fig_box_sic.png                    box and whisker summary of SIC, all four methods
+  fig_box_floe_count.png             box and whisker summary of floe count, all four methods
   fig_time_per_floe.png              computation time per floe, per method
   fig_time_per_frame_and_floe.png    computation time per frame and per floe, side by side, per method
 
-Run with:  python compare_methods.py
+Run with python compare_methods.py
 """
 
 import os
@@ -34,7 +31,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# ---- configuration -------------------------------------------------------
+# configuration 
 
 LOG_PATHS = {
     "GVF": "gvf_snake_sic_log.csv",
@@ -45,9 +42,6 @@ LOG_PATHS = {
 
 BASELINE = "Liss"   # the reference every relative error is measured against
 
-# one colour per method, kept identical across every plot in this script.
-# Okabe and Ito's colourblind safe palette, chosen for maximum separation
-# between all four lines when they overlap heavily on the same axes
 COLORS = {
     "GVF": "#0072B2",     # blue
     "YOLOE": "#D55E00",   # vermillion
@@ -58,17 +52,11 @@ COLORS = {
 OUT_DIR = "figures"
 
 
-# ---- loading ---------------------------------------------------------------
+# loading 
 
 def load_log(method, path):
     """
-    Loads one pipeline's per frame CSV log and harmonises it to a common
-    set of columns, source_frame_index, floe_count, sic_percent, exec_time_s.
-
-    The GVF log is the only one that splits floe count into
-    num_direct_floes and num_snake_floes, with total_floes as their sum, so
-    that is what gets used here. The other three logs already write a
-    single num_floes column.
+    Loads one pipeline's per frame CSV log
     """
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -96,9 +84,6 @@ def load_log(method, path):
 def load_all():
     frames = {m: load_log(m, p) for m, p in LOG_PATHS.items()}
 
-    # a quick, honest check that the four runs are actually comparable,
-    # since a relative error only means something if every method was run
-    # at the same frame stride on the same video
     strides = {m: df["source_frame_index"].diff().dropna().mode().iat[0] for m, df in frames.items()}
     if len(set(strides.values())) > 1:
         print("Warning, the four logs do not share the same frame stride, "
@@ -107,7 +92,7 @@ def load_all():
     return frames
 
 
-# ---- plot 1 and 2, raw series per frame, all methods together --------------
+#   raw series per frame, all methods together 
 
 def plot_series_per_frame(frames, value_col, ylabel, title, out_path):
     fig, ax = plt.subplots(figsize=(7, 3.5))
@@ -117,8 +102,6 @@ def plot_series_per_frame(frames, value_col, ylabel, title, out_path):
     ax.set_xlabel("Frame index")
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    # legend sits below the axes, out of the way of the lines themselves,
-    # rather than floating inside the plot where it can sit on top of data
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=4, frameon=False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -128,7 +111,7 @@ def plot_series_per_frame(frames, value_col, ylabel, title, out_path):
     print("Saved", out_path)
 
 
-# ---- new, each method against Liss on its own -------------------------------
+# each method against Liss on its own
 
 def plot_method_vs_baseline(frames, method, value_col, ylabel, title, out_path, baseline=BASELINE):
     """The same per frame series as plot_series_per_frame, but just one
@@ -151,12 +134,47 @@ def plot_method_vs_baseline(frames, method, value_col, ylabel, title, out_path, 
     print("Saved", out_path)
 
 
-# ---- plots 3 and 4, relative error against the Liss baseline ---------------
+# each method on its own, with its mean marked 
+
+def plot_own_output(frames, method, out_path):
+    
+    df = frames[method]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.5))
+
+    sic_mean = df["sic_percent"].mean()
+    ax1.plot(df["source_frame_index"], df["sic_percent"],
+              color=COLORS[method], linewidth=1.0)
+    ax1.axhline(sic_mean, color=COLORS[method], linewidth=1.2, linestyle="--",
+                 label=f"Mean = {sic_mean:.1f}%")
+    ax1.set_xlabel("Frame index")
+    ax1.set_ylabel("SIC [%]")
+    ax1.set_title("Sea ice concentration per frame")
+    ax1.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=1, frameon=False)
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
+
+    count_mean = df["floe_count"].mean()
+    ax2.plot(df["source_frame_index"], df["floe_count"],
+              color=COLORS[method], linewidth=1.0)
+    ax2.axhline(count_mean, color=COLORS[method], linewidth=1.2, linestyle="--",
+                 label=f"Mean = {count_mean:.1f}")
+    ax2.set_xlabel("Frame index")
+    ax2.set_ylabel("Floe count")
+    ax2.set_title("Floe count per frame")
+    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=1, frameon=False)
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+
+    fig.suptitle(f"{method}, own output over the sequence")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print("Saved", out_path)
+
+
+# relative error against the Liss baseline 
 
 def merged_wide(frames, value_col):
-    """One row per frame index that every method actually shares, one
-    column per method, an inner join so a relative error is never computed
-    against a frame some method skipped."""
     wide = None
     for m, df in frames.items():
         s = df.set_index("source_frame_index")[value_col].rename(m)
@@ -166,8 +184,7 @@ def merged_wide(frames, value_col):
 
 def relative_error(wide, baseline=BASELINE):
     """Per frame percent relative error of each method against the
-    baseline column. Undefined, left as NaN, on a frame where the baseline
-    itself is zero, since a percent error against zero has no meaning."""
+    baseline column"""
     base = wide[baseline]
     out = pd.DataFrame(index=wide.index)
     for col in wide.columns:
@@ -178,9 +195,7 @@ def relative_error(wide, baseline=BASELINE):
 
 
 def plot_relative_error_bar(re_df, ylabel, title, out_path):
-    """Mirrors Passerotti et al. (2026) Figure 11a and 11g, a relative
-    error per method against a reference line at zero, only their
-    reference is the manual benchmark and this one is the Liss baseline."""
+    """Relative error per method against a reference line at zero"""
     methods = list(re_df.columns)
     means = [re_df[m].mean(skipna=True) for m in methods]
     stds = [re_df[m].std(skipna=True) for m in methods]
@@ -203,15 +218,41 @@ def plot_relative_error_bar(re_df, ylabel, title, out_path):
     print("Saved", out_path)
 
 
-# ---- plot 5, computation time per floe --------------------------------------
+# box and whisker summary across methods
+
+def plot_box_whisker(frames, value_col, ylabel, title, out_path, baseline=BASELINE):
+    """
+    Box and whisker summary of one metric across all four methods, median,
+    interquartile range, and whiskers, with the Liss baseline drawn
+    alongside the other three.
+    """
+    methods = list(frames.keys())
+    methods = [m for m in methods if m != baseline] + [baseline]
+    data = [frames[m][value_col].dropna().values for m in methods]
+
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    bp = ax.boxplot(data, tick_labels=methods, patch_artist=True, showmeans=True,
+                     meanprops={"marker": "D", "markerfacecolor": "white",
+                                "markeredgecolor": "black", "markersize": 5},
+                     medianprops={"color": "black"})
+    for patch, m in zip(bp["boxes"], methods):
+        patch.set_facecolor(COLORS[m])
+        patch.set_alpha(0.6)
+
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print("Saved", out_path)
+
+
+# computation time per floe
 
 def plot_time_per_floe(frames, out_path):
-    """Time per floe rather than time per frame, following Passerotti et
-    al. (2026), so a densely packed frame is not read as a slower method
-    just because it had more floes to contour. Computed as total execution
-    time over total floe count across the whole run, rather than averaging
-    a per frame ratio, so frames with zero floes do not need to be
-    dropped or cause a division by zero."""
+    """Time per floe"""
     methods, values_ms = [], []
     for m, df in frames.items():
         total_time = df["exec_time_s"].sum()
@@ -235,19 +276,10 @@ def plot_time_per_floe(frames, out_path):
     print("Saved", out_path)
 
 
-# ---- plot 6, computation time per frame and per floe, side by side ---------
+# computation time per frame and per floe, side by side
 
 def plot_time_per_frame_and_floe(frames, out_path):
-    """Time per frame and time per floe next to each other, one panel each,
-    so the two ways of reporting cost can be compared directly. The two
-    metrics differ by roughly two orders of magnitude for the slower
-    methods, so they are drawn on separate axes rather than one shared
-    axis or a twin axis, which would either flatten the per floe bars to
-    nothing or make the chart harder to read at a glance.
-
-    Time per frame is the mean of exec_time_s across all frames for that
-    method. Time per floe is computed the same way as plot_time_per_floe,
-    total execution time over total floe count across the whole run."""
+    """Time per frame"""
     methods = list(frames.keys())
     per_frame_ms, per_floe_ms = [], []
     for m in methods:
@@ -283,7 +315,7 @@ def plot_time_per_frame_and_floe(frames, out_path):
     print("Saved", out_path)
 
 
-# ---- entry point -------------------------------------------------------------
+# entry point
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -300,8 +332,7 @@ def main():
         os.path.join(OUT_DIR, "fig_floe_count_per_frame.png"),
     )
 
-    # each method against Liss on its own, easier to read than four lines
-    # crossing each other, one pair of figures per method
+    # each method against Liss on its own
     for m in frames:
         if m == BASELINE:
             continue
@@ -316,6 +347,11 @@ def main():
             f"Floe count per frame, {m} against {BASELINE}",
             os.path.join(OUT_DIR, f"fig_floe_count_{tag}_vs_liss.png"),
         )
+
+    # each method entirely on its own, with its mean marked
+    for m in frames:
+        tag = m.lower()
+        plot_own_output(frames, m, os.path.join(OUT_DIR, f"fig_own_{tag}.png"))
 
     wide_count = merged_wide(frames, "floe_count")
     wide_sic = merged_wide(frames, "sic_percent")
@@ -334,10 +370,22 @@ def main():
         os.path.join(OUT_DIR, "fig_relative_error_sic.png"),
     )
 
+    # box and whisker summaries
+    plot_box_whisker(
+        frames, "sic_percent", "SIC [%]",
+        "Distribution of sea ice concentration, by method",
+        os.path.join(OUT_DIR, "fig_box_sic.png"),
+    )
+    plot_box_whisker(
+        frames, "floe_count", "Floe count",
+        "Distribution of floe count, by method",
+        os.path.join(OUT_DIR, "fig_box_floe_count.png"),
+    )
+
     plot_time_per_floe(frames, os.path.join(OUT_DIR, "fig_time_per_floe.png"))
     plot_time_per_frame_and_floe(frames, os.path.join(OUT_DIR, "fig_time_per_frame_and_floe.png"))
 
-    print(f"\nDone. Twelve figures saved to '{OUT_DIR}/'.")
+    print(f"\nDone. Figures saved to '{OUT_DIR}/'.")
 
 
 if __name__ == "__main__":

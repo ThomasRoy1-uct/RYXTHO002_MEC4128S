@@ -11,13 +11,6 @@ concentration is computed the same way Liss's analysis() function did,
 as a pixel area ratio, so no separate real world calibration step is
 needed. Ice type categorization, pancake, brash, frazil, is deliberately
 left out.
-
-Running this script produces an annotated output video,
-out_liss_benchmark.mp4, showing the preprocessed frame with inlier
-contours in green, outlier contours in red, and floe count and sea ice
-concentration overlaid as text on each frame, the same information
-Liss's own create_video() reported, plus a per frame CSV log,
-out_liss_benchmark.csv, matching the GVF, YOLOE, and SAM 2 pipelines.
 """
 
 import csv
@@ -36,12 +29,8 @@ def nothing(x):
 def set_threshold_interactive(frame_gray):
     """
     Liss's interactive threshold tuning, adapted to run on an already
-    preprocessed grayscale frame from the shared pipeline rather than
-    his hardcoded image_trans.jpg. Drag the trackbar until the contour
-    overlay looks right, then press Esc to lock in the value.
-
-    :param frame_gray: a single preprocessed grayscale frame, as a numpy array
-    :return: the chosen threshold value
+    preprocessed grayscale frame. Drag the trackbar until the contour
+    overlay looks right, then press Esc to lock in the value. Value chosen was 155 for threshold. 
     """
     cv2.namedWindow('image')
     cv2.createTrackbar("threshold", "image", 127, 255, nothing)
@@ -94,8 +83,7 @@ def liss_threshold_contour(imgray, threshold, kernel_size=5):
 
 def find_outliers(contours, data_area, sensitivity=3):
     """
-    Liss's outlier rejection, unchanged in logic. Removes contours whose
-    area falls outside mean plus or minus sensitivity standard deviations.
+    Liss's outlier rejection, unchanged in logic.
     """
     m = np.mean(data_area)
     st_dev = statistics.stdev(data_area)
@@ -121,8 +109,7 @@ def liss_benchmark(frame_gray, threshold):
     Full Liss contouring benchmark step for a single frame. Returns
     inlier and outlier contours, floe count, and sea ice concentration,
     computed the same way Liss's analysis() function did, as a pixel
-    area ratio, so no real world calibration is required. Ice type
-    categorization is left out.
+    area ratio.
     """
     contours, thresh_mask = liss_threshold_contour(frame_gray, threshold)
     raw_areas = [cv2.contourArea(c) for c in contours]
@@ -153,8 +140,7 @@ def liss_benchmark(frame_gray, threshold):
 def annotate_frame(frame_gray, result):
     """
     Draws inlier contours in green, outlier contours in red, and floe
-    count and sea ice concentration as text, onto a color copy of the
-    preprocessed frame, for writing to the output video.
+    count and sea ice concentration as text.
     """
     img = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2BGR)
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -171,9 +157,7 @@ def annotate_frame(frame_gray, result):
 def write_results_csv(frame_results, output_csv):
     """
     Writes the per frame benchmark log to CSV, one row per frame, using
-    the same column names as the SAM 2 pipeline's log,
-    source_frame_index, num_floes, sic_percent, exec_time_s, so all
-    four benchmark logs line up for the comparison stage.
+    the same column names
     """
     fieldnames = ["source_frame_index", "num_floes", "sic_percent", "exec_time_s"]
 
@@ -197,8 +181,7 @@ def main():
         raise RuntimeError("Could not read first frame")
 
     # initial_perspective_transform needs a file path, not a frame array,
-    # so save the first frame out before calling it. Same calibration
-    # step used by the other three pipelines.
+    # so save the first frame out before calling it. 
     cv2.imwrite("first_frame.jpg", first_frame)
     _, factor, x, y, _, _ = initial_perspective_transform("first_frame.jpg")
 
@@ -209,7 +192,7 @@ def main():
 
     out_height, out_width = first_gray.shape
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    output_fps = 5  # lower this to slow playback down further, raise it to speed up
+    output_fps = 5  
     writer = cv2.VideoWriter(output_video, fourcc, output_fps, (out_width, out_height), True)
 
     frame_results = []

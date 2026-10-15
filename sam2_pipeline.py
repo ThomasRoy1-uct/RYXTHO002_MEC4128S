@@ -1,101 +1,32 @@
 """
-SAM 2 video pipeline, benchmarked against the GVF snake and YOLOE11
-pipelines on the same source footage and the same two comparison
-metrics, sea ice concentration (SIC) percentage and floe count.
+SAM 2 video pipeline.
 
-Passerotti et al. (2026) tested SAM in two modes, a fully automatic
-grid prompted mode (SAM-A) and a seed point prompted mode (SAM-P), and
-found SAM-P performed clearly better overall, missing far fewer floes
-than SAM-A across their benchmark set. The seeds used for SAM-P in the
-paper come directly from the same distance transform stage already
-used to initialize their GVF snake, one seed per distinct floe or
-merged cluster, rather than from a fixed grid across the whole frame.
-This script follows that same design. It does not run SAM 2 in fully
-automatic mode at all, instead it imports the seed generation functions
-straight from gvf_pipeline.py (tiled_otsu_binarize, raw_local_maxima,
-suppress_seeds_in_component) and reruns that exact seeding stage on
-each frame, then hands every resulting seed to SAM 2 as a single point
-prompt, matching the paper's description of SAM-P reusing the GVF
-seeding stage's own output rather than generating its own.
-
-Passerotti et al. also tested SAM 2 directly against the original SAM
-and found it detected on average 40 percent fewer floes in automatic
-mode and 13 percent fewer in prompt based mode on this kind of imagery,
-attributing the gap to SAM 2 handling low contrast scenes worse, and
-chose to continue with the original SAM for the rest of their paper for
-that reason. This project benchmarks SAM 2 specifically rather than the
-original SAM, so going in expecting SAM 2 to underperform its own
-published reputation here is a documented finding for this exact
-problem domain, not a setup mistake.
-
-After each seed produces a mask, the paper applies shape based filters,
-convexity, circularity, and eccentricity, to remove masks that swallow
-open water rather than isolating a single floe, since SAM cannot tell
-ice and water apart on its own, only that something in the frame forms
-a distinct region around the prompted point. This script applies the
-same three filters. The convexity cutoff of 0.8 is taken directly from
-Section 4.2.1 of the paper, masks at or below that value are excluded,
-and is left alone for that reason, changing a paper sourced constant to
-move this benchmark's numbers closer to another method is the same
-tuning for results the project already ruled out elsewhere (GVF's
-watershed option, the Liss benchmark's own parameters).
 
 CIRCULARITY_MIN and ECCENTRICITY_MAX below started as placeholder
 values, not sourced from the paper, with a note to check them against
 whatever thresholds gvf_pipeline.py itself uses for its own
 hallucination filtering, so all three pipelines are held to the same
-standard of what counts as a valid floe shape. That check has now been
-done for one of the two. ECCENTRICITY_MAX is set to 0.9, matching
-gvf_pipeline.py's own ECCENTRICITY_HALLUCINATION_MIN exactly, since
-both are screening for the same thing, an overly elongated, line like
-shape, so borrowing GVF's already measured cutoff is a direct fix
-rather than a guess. CIRCULARITY_MIN has no equivalent to borrow, GVF's
-own circularity check flags shapes above 1.0 as hallucinated near
-perfect circles, a discretisation artefact check on the upper end,
-while this filter is screening the lower end, rejecting irregular open
-water blobs that never resembled a floe to begin with. The two checks
-are not measuring the same failure mode, so there is nothing to align
-CIRCULARITY_MIN against yet, it remains a placeholder and should be
-validated the way ABS_SEP_SCALE_FACTOR was in gvf_pipeline.py, measured
-directly against confirmed real floe masks and confirmed water blob
-masks on this footage, not adjusted by eye.
+standard of what counts as a valid floe shape. 
 
 Preprocessing, perspective correction and gray level enhancement, is
-handled by sea_ice_preprocessing.py, the same module the other two
-pipelines import from. Gray level enhancement is always applied before
-seed generation here, since that is what gvf_pipeline.py itself does
-before its own seeding stage runs, and matching that input is what
-makes these genuinely the same seeds the paper describes reusing,
-rather than a separately tuned approximation of them. Whether the
-enhanced or plain color frame is handed to SAM 2 itself for mask
-prediction is a separate question, controlled by APPLY_GRAY_ENHANCEMENT
-below, and follows the same reasoning already used in
-yoloe_pipeline.py, SAM 2 is a pretrained model and collapsing its input
+handled by sea_ice_preprocessing.py.Gray level enhancement is always applied before
+seed generation here. SAM 2 is a pretrained model and collapsing its input
 to grayscale throws away information its pretrained weights likely
 rely on, so this defaults to False.
 
-A judgment call worth flagging directly. gvf_pipeline.py's own seeding
-stage runs tiled_otsu_binarize and raw_local_maxima, then loops over
-connected components to scope suppress_seeds_in_component to each one
-in turn, skipping components below a small area floor. The three
-functions themselves are imported here, so any tuning already done
-inside them carries over automatically, but the connected component
-loop that ties them together is reconstructed locally below rather than
-imported, since it currently lives inline inside gvf_pipeline.py's
-segment_frame rather than as its own function. If segment_frame's loop
-has since changed, a different area floor, an added step on the binary
-mask, this function needs the matching change too. Worth a direct side
-by side check of seed counts between the two logs on the same frames
-before relying on floe counts lining up across pipelines.
 
 Usage
 
-    python sam2_pipeline.py
 
 Reads RAW_VIDEO_PATH below, runs interactive perspective calibration
 once against its first frame, then processes the rest of the video.
 Writes an annotated video and a per frame CSV log of floe count and
 sea ice concentration.
+
+Checkpoint and config need to be downloaded separately per Meta's SAM 2
+setup instructions, and both need to point at files that actually exist
+on disk, these names match the SAM 2.1 large release, swap for whichever
+checkpoint size is actually installed
 """
 
 import csv
@@ -113,53 +44,43 @@ from sea_ice_preprocessing import initial_perspective_transform, perspective_tra
 from gvf_pipeline import tiled_otsu_binarize, raw_local_maxima, suppress_seeds_in_component
 
 
-# =============================================================================
+
 # Configuration
-# =============================================================================
-RAW_VIDEO_PATH = "video01.mp4"                    # same raw footage as gvf_pipeline.py and yoloe_pipeline.py
+
+RAW_VIDEO_PATH = "video01.mp4"                    
 OUTPUT_VIDEO_PATH = "sam2_output.mp4"
 OUTPUT_CSV_PATH = "sam2_sic_log.csv"
-FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"    # written once, deleted after calibration
+FIRST_FRAME_TEMP_PATH = "first_frame_temp.jpg"    
 
 FRAME_STRIDE = 1  
 
-# Checkpoint and config need to be downloaded separately per Meta's SAM 2
-# setup instructions, and both need to point at files that actually exist
-# on disk, these names match the SAM 2.1 large release, swap for whichever
-# checkpoint size is actually installed
+
 SAM2_CHECKPOINT = "/Users/thomasroy/sam2/checkpoints/sam2.1_hiera_large.pt"
 SAM2_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
-APPLY_GRAY_ENHANCEMENT = False   # applies to the frame SAM 2 sees for mask prediction, not to seed generation, see the note near the top of this file
+APPLY_GRAY_ENHANCEMENT = False   
 
-SEED_MIN_COMPONENT_AREA = 15   # mirrors gvf_pipeline.py's own component area floor, check this stays in sync
+SEED_MIN_COMPONENT_AREA = 15   # mirrors gvf_pipeline.py's own component area floor
 
 # Shape filters applied to each mask after SAM 2 returns it, matching
-# Passerotti et al. Section 4.2.1's approach of filtering out masks that
-# capture open water rather than a single floe
-CONVEXITY_MIN = 0.8       # Passerotti et al. Section 4.2.1, masks at or below this are excluded, paper sourced, leave as is
-CIRCULARITY_MIN = 0.5     # still a placeholder, no GVF equivalent to borrow, see the note near the top of this file, needs direct measurement against confirmed floe versus water blob masks before trusting this value
-ECCENTRICITY_MAX = 0.97    # matched to gvf_pipeline.py's own ECCENTRICITY_HALLUCINATION_MIN, was 0.95, both filters screen for the same overly elongated, line like failure mode
+# Passerotti et al. 
+CONVEXITY_MIN = 0.8       # Passerotti et al.  masks at or below this are excluded
+CIRCULARITY_MIN = 0.5     
+ECCENTRICITY_MAX = 0.97    
 MIN_MASK_AREA_PX = 20     # drops near empty masks that indicate a failed prompt rather than a real floe
-MAX_MASK_AREA_FRACTION = 0.05   # drops masks covering more than 5 percent of the frame, added after debug_sam2_mask_overlay.py showed a single point prompt returning a mask spanning nearly the whole packed ice field, which still passed all three shape filters since the outer boundary of a dense cluster is itself fairly round and convex, with 87 to 150 seeds typically landing on one frame here, no single floe should plausibly occupy anywhere near this much of it, not yet re-tested against how many masks it actually rejects per frame
+MAX_MASK_AREA_FRACTION = 0.05   # drops masks covering more than 5 percent of the frame
 
-VALID_PIXEL_MIN_BRIGHTNESS = 3   # near black pixels are the warp border, not water, matches the other two pipelines
+VALID_PIXEL_MIN_BRIGHTNESS = 3   # near black pixels are the warp border
 
-DEBUG_VERBOSE = True   # prints raw seed count against surviving floe count per frame, to separate seed generation failures from SAM 2 or shape filter failures
+DEBUG_VERBOSE = True   
 
 
-# =============================================================================
+
 # Seed generation, reusing gvf_pipeline.py's own seeding stage directly
-# =============================================================================
 def generate_seed_points(enhanced_gray):
     """Reproduces gvf_pipeline.py's own seeding stage, tiled Otsu
     binarization, raw local maxima on the distance transform, then per
-    component seed suppression, since Passerotti et al. Section 4.2.2
-    describe SAM-P's seeds as coming directly from the distance
-    transform matrix introduced in their Section 4.1, the same seeding
-    stage already used to initialize the GVF snake. Returns a flat list
-    of (x, y, d) seed tuples across the whole frame, one seed per
-    distinct floe or merged cluster still needing separation."""
+    component seed suppression."""
     binary = tiled_otsu_binarize(enhanced_gray)
     raw_seeds = raw_local_maxima(binary)
 
@@ -178,15 +99,13 @@ def generate_seed_points(enhanced_gray):
     return seed_points
 
 
-# =============================================================================
-# Shape filters, matching Passerotti et al. Section 4.2.1's approach to
-# removing masks that capture open water rather than a single floe
-# =============================================================================
+
+# Shape filters, matching Passerotti et al. (2026) approach 
+
 def mask_convexity(contour):
     """Ratio of contour area to its own convex hull area, close to 1 for
     the rounded, mostly convex shape of a real floe, lower for irregular
-    open water regions. Matches the convexity coefficient used in
-    Passerotti et al. Section 4.2.1."""
+    open water regions"""
     area = cv2.contourArea(contour)
     hull_area = cv2.contourArea(cv2.convexHull(contour))
     if hull_area <= 0:
@@ -206,10 +125,8 @@ def mask_circularity(contour):
 
 def mask_eccentricity(contour):
     """Eccentricity of the contour's best fit ellipse, 0 for a circle,
-    approaching 1 for an increasingly elongated shape. Needs at least 5
-    points to fit an ellipse at all, contours with fewer are already too
-    small or degenerate to be a real floe, treated as maximally
-    eccentric so they fail the filter below."""
+    approaching 1 for an increasingly elongated shape.
+    """
     if len(contour) < 5:
         return 1.0
     (_, _), (minor_axis, major_axis), _ = cv2.fitEllipse(contour)
@@ -227,18 +144,10 @@ def is_valid_floe_shape(contour):
     )
 
 
-# =============================================================================
+
 # SAM 2 mask generation, one point prompt per seed
-# =============================================================================
 def masks_from_seeds(predictor, seed_points, frame_shape):
-    """Runs SAM 2 once per seed with a single positive point prompt,
-    keeps the highest scoring of the three candidate masks SAM 2 returns
-    for an ambiguous single point, then applies the shape filters above.
-    Seeds that fail shape filtering are discarded rather than corrected,
-    consistent with the rest of this project's benchmarking philosophy,
-    a model's own failure to isolate a clean floe from a given prompt is
-    itself something this benchmark is measuring, not something to
-    quietly patch around."""
+    """Runs SAM 2 once per seed with a single positive point prompt"""
     h, w = frame_shape[:2]
     instance_masks = []
     discard_reasons = {
@@ -278,11 +187,8 @@ def masks_from_seeds(predictor, seed_points, frame_shape):
             discard_reasons["too_large"] += 1
             continue
 
-        # Checked individually rather than through is_valid_floe_shape here,
-        # so a seed that fails more than one criterion gets counted against
-        # each one, since the point of this breakdown is finding out which
-        # threshold is actually doing the rejecting, not just that one of
-        # them did
+        # Checked individually rather than through is_valid_floe_shape
+        
         convexity = mask_convexity(contour)
         circularity = mask_circularity(contour)
         eccentricity = mask_eccentricity(contour)
@@ -326,9 +232,7 @@ def masks_from_seeds(predictor, seed_points, frame_shape):
 
 def build_ice_mask(instance_masks, frame_shape):
     """Unions every surviving instance mask into one binary mask for the
-    SIC calculation, matching the union operation Passerotti et al.
-    describe in Section 4.2.1 for consolidating SAM's output into a
-    single unified mask."""
+    SIC calculation"""
     h, w = frame_shape[:2]
     union_mask = np.zeros((h, w), dtype=np.uint8)
     for mask in instance_masks:
@@ -337,16 +241,12 @@ def build_ice_mask(instance_masks, frame_shape):
 
 
 def valid_pixel_mask(gray, min_brightness=VALID_PIXEL_MIN_BRIGHTNESS):
-    """Near black pixels are treated as the blank border warpPerspective
-    leaves outside the mapped source region, not open water, and are
-    excluded from the sea ice concentration denominator. Matches the
-    function of the same name in gvf_pipeline.py and yoloe_pipeline.py."""
     return (gray >= min_brightness).astype(np.uint8)
 
 
-# =============================================================================
 # Device selection
-# =============================================================================
+# Selects CPU or local GPU
+
 def select_device():
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -363,9 +263,8 @@ def select_device():
     return device
 
 
-# =============================================================================
+
 # Main video loop, calibration once, then preprocessing and SAM 2 together
-# =============================================================================
 def main():
     cap = cv2.VideoCapture(RAW_VIDEO_PATH)
     if not cap.isOpened():
@@ -385,8 +284,7 @@ def main():
     _, factor, x, y, width, height = initial_perspective_transform(FIRST_FRAME_TEMP_PATH)
     os.remove(FIRST_FRAME_TEMP_PATH)
 
-    # Rewind to the start, the frame used for calibration still needs to
-    # go through the full pipeline like every other frame
+    
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     out_fps = max(fps / FRAME_STRIDE, 1.0)
@@ -420,10 +318,10 @@ def main():
 
         t0 = time.time()
 
-        # Preprocessing, using the calibration locked in above
+        # Preprocessing, using the calibration 
         corrected = perspective_transform(frame, factor, x, y)
         gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
-        enhanced = enhance_gray(gray)   # always used for seeding, see the note near the top of this file
+        enhanced = enhance_gray(gray)   # always used for seeding
 
         seed_points = generate_seed_points(enhanced)
 
